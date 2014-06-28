@@ -79,7 +79,7 @@ def given(name, fixture=None, converters=None):
     return _step_decorator(GIVEN, name, converters=converters)
 
 
-def when(name, converters=None):
+def when(name, fixture=None, converters=None):
     """When step decorator.
 
     :param name: Step name.
@@ -89,6 +89,19 @@ def when(name, converters=None):
     :raises: StepError in case of wrong configuration.
 
     """
+
+    if fixture is not None:
+        module = get_caller_module()
+        step_func = lambda request: request.getfuncargvalue(fixture)
+        step_func.step_type = WHEN
+        step_func.converters = converters
+        step_func.__name__ = name
+        step_func.fixture = fixture
+        func = pytest.fixture(lambda: step_func)
+        func.__doc__ = 'Alias for the "{0}" fixture.'.format(fixture)
+        contribute_to_module(module, remove_prefix(name), func)
+        return _not_a_fixture_decorator
+
     return _step_decorator(WHEN, name, converters=converters)
 
 
@@ -138,7 +151,7 @@ def _step_decorator(step_type, step_name, converters=None):
     def decorator(func):
         step_func = func
 
-        if step_type == GIVEN:
+        if step_type == GIVEN or step_type == WHEN:
             if not hasattr(func, '_pytestfixturefunction'):
                 # Avoid multiple wrapping of a fixture
                 func = pytest.fixture(func)

@@ -9,26 +9,33 @@ test_publish_article = scenario(
     feature_name='publish_article.feature',
     scenario_name='Publishing the article',
 )
-
 """
-
 import collections
+import inspect
 import os
-import imp
-
-import inspect  # pragma: no cover
-from os import path as op  # pragma: no cover
 
 import pytest
-
 from _pytest import python
 
-from pytest_bdd.feature import Feature, force_encode  # pragma: no cover
-from pytest_bdd.steps import execute, recreate_function, get_caller_module, get_caller_function
-from pytest_bdd.types import GIVEN
-from pytest_bdd import exceptions
+from . import exceptions
+from . import plugin
+from .feature import (
+    Feature,
+    force_encode,
+)
+from .steps import (
+    execute,
+    get_caller_function,
+    get_caller_module,
+    PY3,
+    recreate_function,
+)
+from .types import GIVEN
 
-from pytest_bdd import plugin
+
+if PY3:
+    import runpy
+    execfile = runpy.run_path
 
 
 def _inject_fixture(request, arg, value):
@@ -37,7 +44,6 @@ def _inject_fixture(request, arg, value):
     :param request: pytest fixture request
     :param arg: argument name
     :param value: argument value
-
     """
     fd = python.FixtureDef(
         request._fixturemanager,
@@ -46,7 +52,7 @@ def _inject_fixture(request, arg, value):
         lambda: value, None, None,
         False,
     )
-    fd.cached_result = (value, 0)
+    fd.cached_result = (value, 0, None)
 
     old_fd = getattr(request, '_fixturedefs', {}).get(arg)
     old_value = request._funcargs.get(arg)
@@ -70,6 +76,23 @@ def _inject_fixture(request, arg, value):
         request.fixturenames.append(arg)
 
 
+def find_argumented_step_fixture_name(name, fixturemanager, request=None):
+    """Find argumented step fixture name."""
+    for fixturename, fixturedefs in fixturemanager._arg2fixturedefs.items():
+        for fixturedef in fixturedefs:
+
+            pattern = getattr(fixturedef.func, 'pattern', None)
+            match = pattern.match(name) if pattern else None
+            if match:
+                converters = getattr(fixturedef.func, 'converters', {})
+                for arg, value in match.groupdict().items():
+                    if arg in converters:
+                        value = converters[arg](value)
+                    if request:
+                        _inject_fixture(request, arg, value)
+                return pattern.pattern
+
+
 def _find_step_function(request, step, encoding):
     """Match the step defined by the regular expression pattern.
 
@@ -77,36 +100,28 @@ def _find_step_function(request, step, encoding):
     :param step: `Step`.
 
     :return: Step function.
-
     """
     name = step.name
     try:
         return request.getfuncargvalue(force_encode(name, encoding))
     except python.FixtureLookupError:
         try:
-            for fixturename, fixturedefs in request._fixturemanager._arg2fixturedefs.items():
-                for fixturedef in fixturedefs:
-
-                    pattern = getattr(fixturedef.func, 'pattern', None)
-                    match = pattern.match(name) if pattern else None
-                    if match:
-                        converters = getattr(fixturedef.func, 'converters', {})
-                        for arg, value in match.groupdict().items():
-                            if arg in converters:
-                                value = converters[arg](value)
-                            _inject_fixture(request, arg, value)
-                        return request.getfuncargvalue(pattern.pattern)
+            name = find_argumented_step_fixture_name(name, request._fixturemanager, request)
+            if name:
+                return request.getfuncargvalue(name)
             raise
-        except python.FixtureLookupError as e:
+        except python.FixtureLookupError:
             raise exceptions.StepDefinitionNotFoundError(
-                """Step definition is not found: "{e.argname}"."""
+                """Step definition is not found: "{step.name}"."""
                 """ Line {step.line_number} in scenario "{scenario.name}" in the feature "{feature.filename}""".format(
-                    e=e, step=step, scenario=step.scenario, feature=step.scenario.feature)
-                )
+                    step=step, scenario=step.scenario, feature=step.scenario.feature)
+            )
 
 
 def _execute_step_function(request, feature, step, step_func, example=None):
     """Execute step function."""
+    request.config.hook.pytest_bdd_before_step(
+        request=request, feature=feature, scenario=step.scenario, step=step, step_func=step_func)
     kwargs = {}
     if example:
         for key in step.params:
@@ -117,24 +132,20 @@ def _execute_step_function(request, feature, step, step_func, example=None):
     try:
         # Get the step argument values
         kwargs = dict((arg, request.getfuncargvalue(arg)) for arg in inspect.getargspec(step_func).args)
-        request.config.hook.pytest_bdd_before_step(
-            request=request, feature=feature, scenario=scenario, step=step, step_func=step_func,
-            step_func_args=kwargs)
         # Execute the step
         step_func(**kwargs)
         request.config.hook.pytest_bdd_after_step(
-            request=request, feature=feature, scenario=scenario, step=step, step_func=step_func,
+            request=request, feature=feature, scenario=step.scenario, step=step, step_func=step_func,
             step_func_args=kwargs)
     except Exception as exception:
         request.config.hook.pytest_bdd_step_error(
-            request=request, feature=feature, scenario=scenario, step=step, step_func=step_func,
+            request=request, feature=feature, scenario=step.scenario, step=step, step_func=step_func,
             step_func_args=kwargs, exception=exception)
         raise
 
 
 def _execute_scenario(feature, scenario, request, encoding, example=None):
     """Execute the scenario."""
-
     givens = set()
     # Execute scenario steps
     for step in scenario.steps:
@@ -173,7 +184,7 @@ def _execute_scenario(feature, scenario, request, encoding, example=None):
 FakeRequest = collections.namedtuple('FakeRequest', ['module'])
 
 
-def get_fixture(caller_module, fixture, path=None, module=None):
+def get_fixture(caller_module, fixture, path=None):
     """Get first conftest module from given one."""
     def call_fixture(function):
         args = []
@@ -181,23 +192,21 @@ def get_fixture(caller_module, fixture, path=None, module=None):
             args = [FakeRequest(module=caller_module)]
         return function(*args)
 
-    if not module:
-        module = caller_module
-
-    if hasattr(module, fixture):
-        return call_fixture(getattr(module, fixture))
-
     if path is None:
-        path = os.path.dirname(module.__file__)
+        if hasattr(caller_module, fixture):
+            return call_fixture(getattr(caller_module, fixture))
+        path = os.path.dirname(caller_module.__file__)
+
     if os.path.exists(os.path.join(path, '__init__.py')):
         file_path = os.path.join(path, 'conftest.py')
         if os.path.exists(file_path):
-            conftest = imp.load_source('conftest', file_path)
-            if hasattr(conftest, fixture):
-                return get_fixture(caller_module, fixture, module=conftest)
+            globs = {}
+            execfile(file_path, globs)
+            if fixture in globs:
+                return call_fixture(globs[fixture])
     else:
-        return get_fixture(caller_module, fixture, module=plugin)
-    return get_fixture(caller_module, fixture, path=os.path.dirname(path), module=module)
+        return call_fixture(plugin.pytestbdd_feature_base_dir)
+    return get_fixture(caller_module, fixture, path=os.path.dirname(path))
 
 
 def _get_scenario_decorator(
@@ -238,8 +247,13 @@ def _get_scenario_decorator(
         if params:
             _scenario = pytest.mark.parametrize(*params)(_scenario)
 
+        for tag in scenario.tags.union(feature.tags):
+            _scenario = getattr(pytest.mark, tag)(_scenario)
+
         _scenario.__doc__ = '{feature_name}: {scenario_name}'.format(
             feature_name=feature_name, scenario_name=scenario_name)
+        _scenario.__scenario__ = scenario
+        scenario.test_function = _scenario
         return _scenario
 
     return recreate_function(decorator, module=caller_module, firstlineno=caller_function.f_lineno)
@@ -249,21 +263,22 @@ def scenario(
         feature_name, scenario_name, encoding='utf-8', example_converters=None,
         caller_module=None, caller_function=None):
     """Scenario."""
-
     caller_module = caller_module or get_caller_module()
     caller_function = caller_function or get_caller_function()
 
     # Get the feature
     base_path = get_fixture(caller_module, 'pytestbdd_feature_base_dir')
-    feature_path = op.abspath(op.join(base_path, feature_name))
-    feature = Feature.get_feature(feature_path, encoding=encoding)
+    feature = Feature.get_feature(base_path, feature_name, encoding=encoding)
 
-    # Get the scenario
+    # Get the sc_enario
     try:
         scenario = feature.scenarios[scenario_name]
     except KeyError:
         raise exceptions.ScenarioNotFound(
-            'Scenario "{0}" in feature "{1}" is not found.'.format(scenario_name, feature_name)
+            'Scenario "{scenario_name}" in feature "{feature_name}" in {feature_filename} is not found.'.format(
+                scenario_name=scenario_name,
+                feature_name=feature.name or '[Empty]',
+                feature_filename=feature.filename)
         )
 
     scenario.example_converters = example_converters

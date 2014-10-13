@@ -1,6 +1,53 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+- For --generate-missing, --feature parameter now correctly does the recursion (bubenkoff)
+
+
+2.4.1
+-----
+
+- Better reporting of a not found scenario (bubenkoff)
+- Simple test code generation implemented (bubenkoff)
+- Correct timing values for cucumber json reporting (bubenkoff)
+- Validation/generation helpers (bubenkoff)
+
+
+2.4.0
+-----
+
+- Background support added (bubenkoff)
+- Fixed double collection of the conftest files if scenario decorator is used (ropez, bubenkoff)
+
+
+2.3.3
+-----
+
+- Added timings to the cucumber json report (bubenkoff)
+
+
+2.3.2
+-----
+
+- Fixed incorrect error message using e.argname instead of step.name (hvdklauw)
+
+
+2.3.1
+-----
+
+- Implemented cucumber tags support (bubenkoff)
+- Implemented cucumber json formatter (bubenkoff, albertjan)
+- Added 'trace' keyword (bubenkoff)
+
+
+2.1.2
+-----
+
+- Latest pytest compartibility fixes (bubenkoff)
+
 
 2.1.1
 -----
@@ -37,7 +84,7 @@ Changelog
 
 
 0.6.11
------
+------
 
 - Fixed step arguments conflict with the fixtures having the same name (olegpidsadnyi)
 

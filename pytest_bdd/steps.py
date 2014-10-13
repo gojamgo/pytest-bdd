@@ -29,26 +29,27 @@ def article(author):
 Reusing existing fixtures for a different step name:
 
 given('I have a beautiful article', fixture='article')
-
 """
-from __future__ import absolute_import  # pragma: no cover
+
+from __future__ import absolute_import
 import re
-from types import CodeType  # pragma: no cover
-import inspect  # pragma: no cover  # pragma: no cover
-import sys  # pragma: no cover
+from types import CodeType
+import inspect
+import sys
 
-import pytest  # pragma: no cover
+import pytest
 
-from pytest_bdd.feature import remove_prefix  # pragma: no cover
-from pytest_bdd.types import GIVEN, WHEN, THEN  # pragma: no cover
+from .feature import parse_line
+from .types import GIVEN, WHEN, THEN
 
-PY3 = sys.version_info[0] >= 3  # pragma: no cover
+PY3 = sys.version_info[0] >= 3
 
 
-class StepError(Exception):  # pragma: no cover
+class StepError(Exception):
+
     """Step declaration error."""
 
-RE_TYPE = type(re.compile(''))  # pragma: no cover
+RE_TYPE = type(re.compile(''))
 
 
 def given(name, fixture=None, converters=None):
@@ -61,9 +62,7 @@ def given(name, fixture=None, converters=None):
 
     :raises: StepError in case of wrong configuration.
     :note: Can't be used as a decorator when the fixture is specified.
-
     """
-
     if fixture is not None:
         module = get_caller_module()
         step_func = lambda request: request.getfuncargvalue(fixture)
@@ -73,7 +72,8 @@ def given(name, fixture=None, converters=None):
         step_func.fixture = fixture
         func = pytest.fixture(lambda: step_func)
         func.__doc__ = 'Alias for the "{0}" fixture.'.format(fixture)
-        contribute_to_module(module, remove_prefix(name), func)
+        _, name = parse_line(name)
+        contribute_to_module(module, name, func)
         return _not_a_fixture_decorator
 
     return _step_decorator(GIVEN, name, converters=converters)
@@ -87,7 +87,6 @@ def when(name, fixture=None, converters=None):
     {<param_name>: <converter function>}.
 
     :raises: StepError in case of wrong configuration.
-
     """
 
     if fixture is not None:
@@ -113,7 +112,6 @@ def then(name, converters=None):
     {<param_name>: <converter function>}.
 
     :raises: StepError in case of wrong configuration.
-
     """
     return _step_decorator(THEN, name, converters=converters)
 
@@ -124,7 +122,6 @@ def _not_a_fixture_decorator(func):
     :param func: Function that is going to be decorated.
 
     :raises: `StepError` if was used as a decorator.
-
     """
     raise StepError('Cannot be used as a decorator when the fixture is specified')
 
@@ -141,7 +138,6 @@ def _step_decorator(step_type, step_name, converters=None):
 
     :note: If the step type is GIVEN it will automatically apply the pytest
     fixture decorator to the step function.
-
     """
     pattern = None
     if isinstance(step_name, RE_TYPE):
@@ -193,7 +189,6 @@ def recreate_function(func, module=None, name=None, add_args=[], firstlineno=Non
     :param add_args: Additional arguments to add to function.
 
     :return: Function copy.
-
     """
     def get_code(func):
         return func.__code__ if PY3 else func.func_code
@@ -244,7 +239,6 @@ def contribute_to_module(module, name, func):
     :param module: Module to contribute to.
     :param name: Attribute name.
     :param func: Function object.
-
     """
     func = recreate_function(func, module=module)
     setattr(module, name, func)
@@ -253,7 +247,10 @@ def contribute_to_module(module, name, func):
 def get_caller_module(depth=2):
     """Return the module of the caller."""
     frame = sys._getframe(depth)
-    return inspect.getmodule(frame)
+    module = inspect.getmodule(frame)
+    if module is None:
+        raise Exception('empty module')
+    return module
 
 
 def get_caller_function(depth=2):

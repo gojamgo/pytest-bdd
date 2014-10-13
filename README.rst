@@ -362,6 +362,81 @@ The code will look like:
 The significant downside of this approach is inability to see the test table from the feature file.
 
 
+Organizing your scenarios
+-------------------------
+
+The more features and scenarios you have, the more important becomes the question about their organization.
+The things you can do (and that is also a recommended way):
+
+* organize your feature files in the folders by semantic groups:
+
+::
+
+    features
+    │
+    ├──frontend
+    │  │
+    │  └──auth
+    │     │
+    │     └──login.feature
+    └──backend
+       │
+       └──auth
+          │
+          └──login.feature
+
+This looks fine, but how do you run tests only for certain feature?
+As pytest-bdd uses pytest, and bdd scenarios are actually normal tests. But test files
+are separate from the feature files, the mapping is up to developers, so the test files structure can look
+completely different:
+
+::
+
+    tests
+    │
+    └──functional
+       │
+       └──test_auth.py
+          │
+          └ """Authentication tests."""
+            from pytest_bdd import scenario
+
+            @scenario('frontend/auth/login.feature')
+            def test_logging_in_frontend():
+                pass
+
+            @scenario('backend/auth/login.feature')
+            def test_logging_in_backend():
+                pass
+
+
+For picking up tests to run we can use
+`tests selection <http://pytest.org/latest/usage.html#specifying-tests-selecting-tests>`_ technique. The problem is that
+you have to know how your tests are organized, knowing ony the feature files organization is not enough.
+`cucumber tags <https://github.com/cucumber/cucumber/wiki/Tags>`_ introduce standard way of categorizing your features
+and scenarios, which pytest-bdd supports. For example, we could have:
+
+.. code-block:: gherkin
+
+    @login @backend
+    Feature: Login
+
+      @successful
+      Scenario: Successful login
+
+
+pytest-bdd uses `pytest markers <http://pytest.org/latest/mark.html#mark>`_ as a `storage` of the tags for the given
+scenario test, so we can use standard test selection:
+
+.. code-block:: bash
+
+    py.test -k "@backend and @login and @successful"
+
+The `@` helps to separate normal markers from the bdd ones.
+Note that if you use pytest `--strict` option, all bdd tags mentioned in the feature files should be also in the
+`markers` setting of the `pytest.ini` config.
+
+
 Test setup
 ----------
 
@@ -452,6 +527,40 @@ Will raise an exception if the step is using the regular expression pattern.
         return create_cucumbers(n)
 
 
+Backgrounds
+-----------
+
+It's often the case that to cover certain feature, you'll need multiple scenarios. And it's logical that the
+setup for those scenarios will have some common parts (if not equal). For this, there are `backgrounds`.
+pytest-bdd implements gherkin `backgrounds <http://docs.behat.org/en/v2.5/guides/1.gherkin.html#backgrounds>`_ for
+features.
+
+.. code-block:: gherkin
+
+    Feature: Multiple site support
+
+      Background:
+        Given a global administrator named "Greg"
+        And a blog named "Greg's anti-tax rants"
+        And a customer named "Wilson"
+        And a blog named "Expensive Therapy" owned by "Wilson"
+
+      Scenario: Wilson posts to his own blog
+        Given I am logged in as Wilson
+        When I try to post to "Expensive Therapy"
+        Then I should see "Your article was published."
+
+      Scenario: Greg posts to a client's blog
+        Given I am logged in as Greg
+        When I try to post to "Expensive Therapy"
+        Then I should see "Your article was published."
+
+In this example, all steps from the background will be executed before all the scenario's own given
+steps, adding possibility to prepare some common setup for multiple scenarios in a single feature.
+About background best practices, please read
+`here <https://github.com/cucumber/cucumber/wiki/Background#good-practices-for-using-background>`_.
+
+
 Reusing fixtures
 ----------------
 
@@ -503,6 +612,19 @@ test_common.py:
 
 There are no definitions of the steps in the test file. They were
 collected from the parent conftests.
+
+
+Default steps
+-------------
+
+Here is the list of steps that are implemented inside of the pytest-bdd:
+
+given
+    * trace - enters the `pdb` debugger via `pytest.set_trace()`
+when
+    * trace - enters the `pdb` debugger via `pytest.set_trace()`
+then
+    * trace - enters the `pdb` debugger via `pytest.set_trace()`
 
 
 Feature file paths
@@ -571,8 +693,8 @@ Hooks
 pytest-bdd exposes several pytest `hooks <http://pytest.org/latest/plugins.html#well-specified-hooks>`_
 which might be helpful building useful reporting, visualization, etc on top of it:
 
-* pytest_bdd_before_step(request, feature, scenario, step, step_func, step_func_args) - Called before step function
-  is executed
+* pytest_bdd_before_step(request, feature, scenario, step, step_func) - Called before step function
+  is executed and it's arguments evaluated
 
 * pytest_bdd_after_step(request, feature, scenario, step, step_func, step_func_args) - Called after step function
   is successfully executed
@@ -594,6 +716,79 @@ Tools recommended to use for browser testing:
 * `pytest-splinter <https://github.com/paylogic/pytest-splinter>`_ - pytest `splinter <http://splinter.cobrateam.info/>`_ integration for the real browser testing
 
 
+Reporting
+---------
+
+It's important to have nice reporting out of your bdd tests. Cucumber introduced some kind of standard for
+`json format <https://www.relishapp.com/cucumber/cucumber/docs/json-output-formatter>`_
+which can be used for `this <https://wiki.jenkins-ci.org/display/JENKINS/Cucumber+Test+Result+Plugin>`_ jenkins
+plugin
+
+To have an output in json format:
+
+::
+
+    py.test --cucumberjson=<path to json report>
+
+
+Test code generation helpers
+----------------------------
+
+For newcomers it's sometimes hard to write all needed test code without being frustrated.
+To simplify their life, simple code generator was implemented. It allows to create fully functional
+but of course empty tests and step definitions for given a feature file.
+It's done as a separate console script provided by pytest-bdd package:
+
+::
+
+    pytest-bdd generate <feature file name> .. <feature file nameN>
+
+It will print the generated code to the standard output so you can easily redirect it to the file:
+
+::
+
+    pytest-bdd generate features/some.feature > tests/functional/test_some.py
+
+
+Advanced code generation
+------------------------
+
+For more experienced users, there's smart code generation/suggestion feature. It will only generate the
+test code which is not yet there, checking existing tests and step definitions the same way it's done during the
+test execution. The code suggestion tool is called via passing additional pytest arguments:
+
+::
+
+    py.test --generate-missing --feature features tests/functional
+
+The output will be like:
+
+::
+
+    ============================= test session starts ==============================
+    platform linux2 -- Python 2.7.6 -- py-1.4.24 -- pytest-2.6.2
+    plugins: xdist, pep8, cov, cache, bdd, bdd, bdd
+    collected 2 items
+
+    Scenario is not bound to any test: "Code is generated for scenarios which are not bound to any tests" in feature "Missing code generation" in /tmp/pytest-552/testdir/test_generate_missing0/tests/generation.feature
+    --------------------------------------------------------------------------------
+
+    Step is not defined: "I have a custom bar" in scenario: "Code is generated for scenario steps which are not yet defined(implemented)" in feature "Missing code generation" in /tmp/pytest-552/testdir/test_generate_missing0/tests/generation.feature
+    --------------------------------------------------------------------------------
+    Please place the code above to the test file(s):
+
+    @scenario('tests/generation.feature', 'Code is generated for scenarios which are not bound to any tests')
+    def test_Code_is_generated_for_scenarios_which_are_not_bound_to_any_tests():
+        """Code is generated for scenarios which are not bound to any tests."""
+
+
+    @given('I have a custom bar')
+    def I_have_a_custom_bar():
+        """I have a custom bar."""
+
+As as side effect, the tool will validate the files for format errors, also some of the logic bugs, for example the
+ordering of the types of the steps.
+
 
 Migration of your tests from versions 0.x.x-1.x.x
 -------------------------------------------------
@@ -607,15 +802,12 @@ decorator. Reasons for that:
   decorator more or not, so to support it along with functional approach there needed to be special parameter
   for that, which is also a backwards-incompartible change.
 
-To help users migrate to newer version, there's migration console script provided with **migrate** extra:
+To help users migrate to newer version, there's migration subcommand of the `pytest-bdd` console script:
 
 ::
 
-    # install extra for migration
-    pip install pytest-bdd[migrate]
-
     # run migration script
-    pytestbdd_migrate_tests <your test folder>
+    pytest-bdd migrate <your test folder>
 
 Under the hood the script does the replacement from this:
 
